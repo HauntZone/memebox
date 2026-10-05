@@ -118,42 +118,25 @@ function isCancel(error) {
 	return /cancel/i.test(describeError(error))
 }
 
-/**
- * **任何平台都必须用 original。**
- *
- * 这里曾经是「小程序用 compressed、其它用 original」，理由写的是"反正后面要缩放到长边上限、
- * compressed 还能省内存"。那个理由是错的，而且错得很贵：compressed 会让微信**重新编码成
- * JPEG**，而有损压缩会直接毁掉两种坦克的载体 ——
- *   - 幻影坦克靠 alpha 通道，JPEG 不支持透明，alpha 直接没了；
- *   - 光棱坦克靠一条只有几十级的亮度带，实测**每像素只要 1 级噪声，显形 PSNR 就掉 9.2 dB**
- *     （38.3 → 29.1），8×8 块效应还会在显形时被放大 10.6 倍、变成满屏小方块。
- * 省内存这点收益和它造成的损失完全不成比例。
- */
-function sizeType() {
-	return 'original'
-}
-
 function pickImagesByApi(pickCount) {
-	// 小程序和 App（3.x）都优先用 chooseMedia：它会直接弹相册页，
-	// 不经过 chooseImage 那套 nativeUI 动作面板，出错概率更低。H5 没有这个 API。
-	if (platformName() !== 'web' && typeof uni.chooseMedia === 'function') {
-		return new Promise((resolve, reject) => {
-			uni.chooseMedia({
-				count: pickCount,
-				mediaType: ['image'],
-				sourceType: ['album', 'camera'],
-				sizeType: [sizeType()],
-				success: (res) =>
-					resolve((res.tempFiles || []).map((file) => file.tempFilePath || file.tempFile)),
-				fail: (err) => reject(makePickError(err))
-			})
-		})
-	}
+	// 三端统一用 chooseImage。曾经在小程序 / App 上优先用 chooseMedia（直接弹相册页、
+	// 不经过 chooseImage 的 nativeUI 动作面板），现在按需求改回 chooseImage ——
+	// 好处是三条路径（幻影坦克 / 光棱坦克 / 摸头表情）行为完全一致，出错也更好定位。
+	// sourceType 只留 album（去掉了一直有的 camera）：直接进相册页，不再弹「拍照 / 相册」面板。
+	//
+	// **sizeType 在哪个平台都必须是 original，不能写成 compressed。**
+	// 这里曾经是「小程序用 compressed、其它用 original」，理由写的是"反正后面要缩放到长边上限、
+	// compressed 还能省内存"。那个理由是错的，而且错得很贵：compressed 会让微信**重新编码成
+	// JPEG**，而有损压缩会直接毁掉两种坦克的载体 ——
+	//   - 幻影坦克靠 alpha 通道，JPEG 不支持透明，alpha 直接没了；
+	//   - 光棱坦克靠一条只有几十级的亮度带，实测**每像素只要 1 级噪声，显形 PSNR 就掉 9.2 dB**
+	//     （38.3 → 29.1），8×8 块效应还会在显形时被放大 10.6 倍、变成满屏小方块。
+	// 省内存这点收益和它造成的损失完全不成比例。
 	return new Promise((resolve, reject) => {
 		uni.chooseImage({
 			count: pickCount,
-			sizeType: [sizeType()],
-			sourceType: ['album', 'camera'],
+			sizeType: ['original'],
+			sourceType: ['album'],
 			success: (res) => resolve(res.tempFilePaths || []),
 			fail: (err) => reject(makePickError(err))
 		})

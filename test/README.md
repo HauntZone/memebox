@@ -149,5 +149,5 @@ ELECTRON_RUN_AS_NODE=1 "$CODE" "$T/petpet.test.mjs"
   只是多数了几个百分点的方块**，很难发现。第 21 节里那条「间隔 2 能反推出间隔」盯着它。
 - **有损压缩的影响比所有参数加起来大一个数量级**（第 22 节）。第 22 节把量级钉死了：
   无损 37.9 dB，每像素 1 级噪声就掉 8.9 dB。**「显形效果差」先排除压缩，再谈别的。**
-  另外 `sizeType()` 必须恒为 `'original'`（选图时请求 `compressed` 会让平台转成 JPEG），
+  另外 `pickImagesByApi` 里的 `sizeType` 必须恒为 `'original'`（选图时请求 `compressed` 会让平台转成 JPEG），
   这条没有测试能覆盖（平台代码跑不了），只能靠人记住。
