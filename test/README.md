@@ -42,6 +42,46 @@ ELECTRON_RUN_AS_NODE=1 "$CODE" "$T/sliderMath.test.mjs"
 档位都要有对应的触点区间**（否则手指停不到具体值）。窄屏那一档（轨道按 258px 算）也在里面 ——
 那是现实里最窄的情况。
 
+## 摸头表情（petpet）
+
+`petpet.test.mjs` 覆盖 `common/petpet.js`（五帧合成）、`common/colorQuantize.js`（中位切分量化）、
+`common/gifWriter.js`（GIF89a 容器 + LZW）和 `common/petpetHands.js`（内嵌的五帧手部素材）。
+
+```bash
+CODE="/c/Users/HauntZone/AppData/Local/Programs/Microsoft VS Code/Code.exe"
+
+T=$(mktemp -d)
+cp common/petpet.js common/imageGeometry.js common/colorQuantize.js common/gifWriter.js \
+   common/petpetHands.js common/pngReader.js common/pako.js test/petpet.test.mjs "$T/"
+printf '{"type":"module"}' > "$T/package.json"
+
+ELECTRON_RUN_AS_NODE=1 "$CODE" "$T/petpet.test.mjs"
+```
+
+机器上装了 node 的话 `node petpet.test.mjs` 直接能跑 —— 但仓库里没有 `package.json`，
+仍然要按上面的办法复制到临时目录再配 `{"type":"module"}`（直接跑 `test/` 下的文件会被当成 CommonJS）。
+
+这一节最值钱的是**测试里那个独立写的 LZW 解码器和 GIF 解析器**：它们是从解码端写的，
+不是把 `lzwEncode` 倒过来抄一遍 —— 位序和码长升降只有独立实现能证伪。
+除此之外还用 **Windows 的 GDI+**（PowerShell `System.Drawing`）做过一次外部校验：
+同一份字节在完全无关的解码器里读出来是 112×112 / 5 帧 / 每帧 6 厘秒 / 颜色正确 / 角落 alpha = 0。
+
+### 不要退化掉的几处
+
+- **LZW 升码长的判据是 `nextCode > (1 << codeSize)`，不是 `>=`**（第 8 节）。解码器的字典
+  比编码器慢一格，用 `>=` 会早一格升位，解码器还在按旧码长读，整条流错位、图整个花掉。
+  另外位写入必须是 **LSB-first**（和 PNG 相反）。
+- **`squish` 的方形基准必须是 `h0`，不能是 `max(w0, h0)`**（第 5 节）。五帧的 `w0` 本来就
+  全都 ≥ `h0`，拿 `max` 当基准会算出恒等于 `w0` 的结果 —— `squish` 会变成一个**完全失效的
+  死参数**（曾经就是这样）。第 5 节里那条「squish 真的改变宽度」就是防这个。
+- **locs 本身就溢出 112 画布**（第 1 帧 12+101=113、33+85=118，第 2 帧 8+110=118），
+  溢出部分被裁掉是**参考实现的行为**（PIL 的 `paste` 就是裁），不是 bug（第 6 节）。
+- **`disposal` 必须是 2（恢复背景）**（第 10 节）。每帧整幅都带透明区，给 1（不处置）时
+  后一帧的透明区会把前一帧透出来，叠成鬼影。
+- **手部素材必须是非隔行、位深 8、颜色类型 4/6 的 PNG**，否则 `decodePng` 返回 `null`、
+  `getHands()` 里就是一堆 `null`。第 1 节直接盯着「五帧都能解开、都是 112×112」——
+  换素材后它红了就说明格式要重转（重转步骤见 `common/petpetHands.LICENSE.md`）。
+
 ## 为什么值得留着
 
 这几个模块是纯函数、无平台依赖，所以能在 App / 小程序 / H5 之外直接验证。

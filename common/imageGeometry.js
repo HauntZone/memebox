@@ -279,3 +279,134 @@ export function composite({ image, background = 255 }) {
 
 	return { width, height, data: out }
 }
+
+/**
+ * 非等比双线性拉伸：把整张源图映射到 width×height，既不裁剪也不保持宽高比。
+ *
+ * 和 resizeCoverImage 的区别就在「刻意变形」—— 摸头表情的挤压感正是来自把方形头像
+ * 压成 110×76 这种非等比矩形。所以这里是独立的一份，不去动 resizeCoverImage
+ * （它的行为被 tanks.test.mjs 第 13/25 节钉死了）。
+ *
+ * 采样跨度取 (原尺寸 - 1)，两端正好落在首尾像素上；目标尺寸为 1 时退化成取第一个像素，避免除零。
+ */
+export function resizeStretchImage(image, width, height) {
+	if (!image || !image.data || !width || !height || !image.width || !image.height) return null
+	const origWidth = image.width
+	const origHeight = image.height
+	const origData = image.data
+
+	if (width === origWidth && height === origHeight) {
+		return { width, height, data: origData.slice() }
+	}
+
+	const spanX = origWidth > 1 ? origWidth - 1 : 1
+	const spanY = origHeight > 1 ? origHeight - 1 : 1
+	const out = new Uint8ClampedArray(width * height * 4)
+
+	for (let y = 0; y < height; y++) {
+		const srcY = (y * (origHeight - 1)) / spanY
+		const y0 = Math.floor(srcY)
+		const y1 = Math.min(y0 + 1, origHeight - 1)
+		const wy = srcY - y0
+
+		for (let x = 0; x < width; x++) {
+			const srcX = (x * (origWidth - 1)) / spanX
+			const x0 = Math.floor(srcX)
+			const x1 = Math.min(x0 + 1, origWidth - 1)
+			const wx = srcX - x0
+
+			const p00 = (y0 * origWidth + x0) * 4
+			const p01 = (y0 * origWidth + x1) * 4
+			const p10 = (y1 * origWidth + x0) * 4
+			const p11 = (y1 * origWidth + x1) * 4
+			const target = (y * width + x) * 4
+
+			for (let k = 0; k < 4; k++) {
+				out[target + k] =
+					(1 - wx) * (1 - wy) * origData[p00 + k] +
+					wx * (1 - wy) * origData[p01 + k] +
+					(1 - wx) * wy * origData[p10 + k] +
+					wx * wy * origData[p11 + k]
+			}
+		}
+	}
+
+	return { width, height, data: out }
+}
+
+/**
+ * 把 top 以 source-over 叠到 base 的 (x, y) 处，超出 base 的部分直接裁掉。
+ *
+ * 两张都是非预乘的 RGBA，合成后必须除以结果 alpha 还原回非预乘 —— 不除的话半透明
+ * 边缘会往黑里偏。越界裁剪是刻意的：参考实现第 2 帧的 8+110 = 118 > 112 画布，
+ * PIL 的 paste 就是裁掉右边 6 像素，这里跟着裁才能复现同样的画面。
+ *
+ * base 先拷一份再改，不动入参。
+ */
+export function pasteOver({ base, top, x = 0, y = 0 }) {
+	if (!base || !base.data || !top || !top.data) throw new Error('缺少像素数据')
+	const width = base.width
+	const height = base.height
+	const topData = top.data
+	const out = base.data.slice()
+
+	for (let ty = 0; ty < top.height; ty++) {
+		const by = y + ty
+		if (by < 0 || by >= height) continue
+
+		for (let tx = 0; tx < top.width; tx++) {
+			const bx = x + tx
+			if (bx < 0 || bx >= width) continue
+
+			const s = (ty * top.width + tx) * 4
+			const sa = topData[s + 3] / 255
+			if (sa === 0) continue
+
+			const d = (by * width + bx) * 4
+			const da = out[d + 3] / 255
+			const oa = sa + da * (1 - sa)
+			if (oa <= 0) {
+				out[d] = 0
+				out[d + 1] = 0
+				out[d + 2] = 0
+				out[d + 3] = 0
+				continue
+			}
+
+			const weightTop = sa / oa
+			const weightBase = (da * (1 - sa)) / oa
+			out[d] = topData[s] * weightTop + out[d] * weightBase
+			out[d + 1] = topData[s + 1] * weightTop + out[d + 1] * weightBase
+			out[d + 2] = topData[s + 2] * weightTop + out[d + 2] * weightBase
+			out[d + 3] = oa * 255
+		}
+	}
+
+	return { width, height, data: out }
+}
+
+/**
+ * 水平镜像。摸头表情的「镜像」开关作用在合成好的整帧上，所以手会跟着一起翻 ——
+ * 这是刻意的，只翻头像会让手和头的朝向对不上。
+ */
+export function flipHorizontal(image) {
+	if (!image || !image.data) throw new Error('缺少像素数据')
+	const width = image.width
+	const height = image.height
+	const src = image.data
+	const out = new Uint8ClampedArray(src.length)
+
+	for (let y = 0; y < height; y++) {
+		const rowStart = y * width
+		for (let x = 0; x < width; x++) {
+			const from = (rowStart + x) * 4
+			const to = (rowStart + (width - 1 - x)) * 4
+			out[to] = src[from]
+			out[to + 1] = src[from + 1]
+			out[to + 2] = src[from + 2]
+			out[to + 3] = src[from + 3]
+		}
+	}
+
+	return { width, height, data: out }
+}

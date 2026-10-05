@@ -522,23 +522,24 @@ export async function readFileBytes(path) {
 	}
 }
 
-// ---------------------------------------------------------------- 导出 PNG
+// ---------------------------------------------------------------- 导出文件（PNG / GIF）
 
-// 导出的统一流程：先用纯 JS 把 PNG 字节算出来，再交给各端落成文件。
-// 三个端拿到的是同一份字节，不再依赖各端 canvas 的导出实现。
+// 导出的统一流程：先用纯 JS 把字节算出来，再交给各端落成文件。
+// 三个端拿到的是同一份字节，不依赖各端 canvas 的导出实现。
+// 幻影坦克 / 光棱坦克走 exportPng，摸头表情走 exportGif；落盘路径是同一条。
 
 let fileNameSeed = 0
 
-function nextFileName(fileNamePrefix) {
+function nextFileName(fileNamePrefix, ext) {
 	fileNameSeed++
-	return (fileNamePrefix || 'image-') + Date.now() + '-' + fileNameSeed + '.png'
+	return (fileNamePrefix || 'image-') + Date.now() + '-' + fileNameSeed + '.' + (ext || 'png')
 }
 
 // #ifdef H5
-function exportBytesWeb(bytes) {
+function exportBytesWeb(bytes, mime) {
 	return new Promise((resolve, reject) => {
 		try {
-			const blob = new Blob([bytes], { type: 'image/png' })
+			const blob = new Blob([bytes], { type: mime || 'image/png' })
 			resolve({ src: URL.createObjectURL(blob) })
 		} catch (error) {
 			reject(new Error('生成图片失败：' + describeError(error)))
@@ -583,14 +584,14 @@ export function releaseImage(src, fileNamePrefix) {
 }
 
 // #ifdef MP-WEIXIN
-function exportBytesWeixin(bytes, fileNamePrefix) {
+function exportBytesWeixin(bytes, fileNamePrefix, ext) {
 	return new Promise((resolve, reject) => {
 		const fs = uni.getFileSystemManager()
 		if (!fs) {
 			reject(new Error('getFileSystemManager 不可用，无法写文件'))
 			return
 		}
-		const filePath = wx.env.USER_DATA_PATH + '/' + nextFileName(fileNamePrefix)
+		const filePath = wx.env.USER_DATA_PATH + '/' + nextFileName(fileNamePrefix, ext)
 		fs.writeFile({
 			filePath: filePath,
 			data: bytes.buffer,
@@ -602,13 +603,13 @@ function exportBytesWeixin(bytes, fileNamePrefix) {
 // #endif
 
 // #ifdef APP-PLUS
-function exportBytesApp(bytes, fileNamePrefix) {
+function exportBytesApp(bytes, fileNamePrefix, ext) {
 	return new Promise((resolve, reject) => {
 		if (typeof plus === 'undefined' || !plus.io) {
 			reject(new Error('plus 运行时不可用，无法写文件'))
 			return
 		}
-		const fileName = nextFileName(fileNamePrefix)
+		const fileName = nextFileName(fileNamePrefix, ext)
 		// plus.io 的 writeAsBinary 要的是「纯 base64 字符串」（不能带 data: 前缀，
 		// 否则报「写入数据非base64字符串」）。转码用 uni 自带的，别自己实现。
 		// 另外社区反馈一次写大文件容易崩，所以按 384KB 分片顺序写 ——
@@ -655,6 +656,25 @@ function exportBytesApp(bytes, fileNamePrefix) {
 // #endif
 
 /**
+ * 把一批字节落成文件，返回可直接给 <image> 用的 src。
+ * 扩展名和 MIME 都要传进来 —— 摸头表情要写 .gif（见 exportGif），
+ * 只认 .png 的话它就只能产出坏文件。
+ */
+function exportBytes(bytes, fileNamePrefix, ext, mime) {
+	const platform = platformName()
+	// #ifdef H5
+	if (platform === 'web') return exportBytesWeb(bytes, mime)
+	// #endif
+	// #ifdef MP-WEIXIN
+	if (platform === 'mp-weixin') return exportBytesWeixin(bytes, fileNamePrefix, ext)
+	// #endif
+	// #ifdef APP-PLUS
+	if (platform === 'app') return exportBytesApp(bytes, fileNamePrefix, ext)
+	// #endif
+	return Promise.reject(new Error('当前平台还不支持导出文件：' + platform))
+}
+
+/**
  * 把 RGBA 像素导出成 PNG，返回可直接给 <image> 用的 src。
  * 字节由 common/pngWriter.js 生成，不经过各端的 canvas 导出实现。
  * fileNamePrefix 决定写出来的文件名，之后要靠它把文件回收掉（见 releaseImage）。
@@ -667,17 +687,16 @@ export function exportPng(image, fileNamePrefix, pngText) {
 	} catch (error) {
 		return Promise.reject(new Error('生成 PNG 数据失败：' + describeError(error)))
 	}
-	const platform = platformName()
-	// #ifdef H5
-	if (platform === 'web') return exportBytesWeb(bytes)
-	// #endif
-	// #ifdef MP-WEIXIN
-	if (platform === 'mp-weixin') return exportBytesWeixin(bytes, fileNamePrefix)
-	// #endif
-	// #ifdef APP-PLUS
-	if (platform === 'app') return exportBytesApp(bytes, fileNamePrefix)
-	// #endif
-	return Promise.reject(new Error('当前平台还不支持导出 PNG：' + platform))
+	return exportBytes(bytes, fileNamePrefix, 'png', 'image/png')
+}
+
+/**
+ * 把现成的 GIF 字节落成文件（摸头表情用）。字节由 common/gifWriter.js 生成。
+ * 和 exportPng 走同一条落盘路径，区别只有扩展名和 MIME。
+ */
+export function exportGif(bytes, fileNamePrefix) {
+	if (!bytes || !bytes.length) return Promise.reject(new Error('GIF 数据为空'))
+	return exportBytes(bytes, fileNamePrefix, 'gif', 'image/gif')
 }
 
 // ---------------------------------------------------------------- 保存
@@ -700,7 +719,10 @@ function savePngWeb(src, fileName) {
 }
 // #endif
 
-/** H5 没有相册接口，改为触发下载；小程序 / App 存相册 */
+/**
+ * H5 没有相册接口，改为触发下载；小程序 / App 存相册。
+ * 名字里带 Png 是历史原因 —— 它只吃 filePath，对 GIF 一样通用（摸头表情就是用它存 GIF 的）。
+ */
 export function savePng(src, fileName) {
 	if (platformName() === 'web') {
 		// #ifdef H5
@@ -715,3 +737,6 @@ export function savePng(src, fileName) {
 		})
 	})
 }
+
+/** savePng 的别名，纯粹为了让「存 GIF」在调用处读起来不别扭。 */
+export const saveGif = savePng

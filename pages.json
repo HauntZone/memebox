@@ -8,7 +8,7 @@
 		}
 	],
 	/* 分包：工具页都在这儿，点开才下载对应那个分包。
-	   按「共用代码」分而不是按「一个工具一个分包」——见下面 pages/tank 的说明 */
+	   按「共用代码」分而不是按「一个工具一个分包」——见下面 pages/image 的说明 */
 	"subPackages": [
 		{
 			// 二维码和计算器各自独立，互相不共用任何 common/ 模块
@@ -29,10 +29,12 @@
 			]
 		},
 		{
-			/* 两个坦克必须同包：它们共用 imagePlatform / imageGeometry / pngReader /
-			   pngWriter / pako。分包优化的规则是「只被一个分包引用的 js 才移出主包」，
-			   拆成两个分包的话这些文件被两个分包同时引用，只能退回主包留着 */
-			"root": "pages/tank",
+			/* 凡是共用 imagePlatform 那一串（imagePlatform / imageGeometry / pngReader /
+			   pngWriter / pako）的工具都必须待在同一个分包里。分包优化的规则是
+			   「只被一个分包引用的 js 才移出主包」—— 再开一个分包装摸头表情的话，
+			   这一串会被两个分包同时引用、只能退回主包留着，主包就不止首页了。
+			   所以摸头表情并进这里，分包 root 也从 pages/tank 改名成了 pages/image。 */
+			"root": "pages/image",
 			"pages": [
 				{
 					"path": "phantom-tank/phantom-tank",
@@ -44,6 +46,12 @@
 					"path": "prism-tank/prism-tank",
 					"style": {
 						"navigationBarTitleText": "光棱坦克"
+					}
+				},
+				{
+					"path": "petpet/petpet",
+					"style": {
+						"navigationBarTitleText": "摸头表情"
 					}
 				}
 			]
