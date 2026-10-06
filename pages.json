@@ -53,6 +53,12 @@
 					"style": {
 						"navigationBarTitleText": "摸头表情"
 					}
+				},
+				{
+					"path": "magic-circle/magic-circle",
+					"style": {
+						"navigationBarTitleText": "魔法阵"
+					}
 				}
 			]
 		}

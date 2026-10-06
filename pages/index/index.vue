@@ -33,6 +33,7 @@
 					{ name: '幻影坦克', desc: '双图隐藏合成', icon: '◨', color: '#3E4C59', path: '/pages/image/phantom-tank/phantom-tank' },
 					{ name: '光棱坦克', desc: '棋盘格双图隐藏', icon: '▚', color: '#EB2F96', path: '/pages/image/prism-tank/prism-tank' },
 					{ name: '摸头表情', desc: '五帧循环 GIF', icon: '☛', color: '#FAAD14', path: '/pages/image/petpet/petpet' },
+					{ name: '魔法阵', desc: '发光魔法阵生成', icon: '✵', color: '#722ED1', path: '/pages/image/magic-circle/magic-circle' },
 					{ name: '二维码', desc: '文本生成二维码', icon: '▦', color: '#269A99', path: '/pages/tools/qrcode/qrcode' },
 					{ name: '计算器', desc: '日常四则运算', icon: '=', color: '#5B8FF9', path: '/pages/tools/calculator/calculator' }
 				]

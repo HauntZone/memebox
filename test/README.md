@@ -82,6 +82,48 @@ ELECTRON_RUN_AS_NODE=1 "$CODE" "$T/petpet.test.mjs"
   `getHands()` 里就是一堆 `null`。第 1 节直接盯着「五帧都能解开、都是 112×112」——
   换素材后它红了就说明格式要重转（重转步骤见 `common/petpetHands.LICENSE.md`）。
 
+## 魔法阵（magic circle）
+
+`magicCircle.test.mjs` 覆盖 `common/magicShape.js`（光栅化原语）、`common/magicRunes.js`
+（符文构字法）和 `common/magicCircle.js`（图层模型 / 预设 / 渲染 / 逐帧 / GIF 组装）。
+
+```bash
+CODE="/c/Users/HauntZone/AppData/Local/Programs/Microsoft VS Code/Code.exe"
+
+T=$(mktemp -d)
+cp common/magicShape.js common/magicRunes.js common/magicCircle.js \
+   common/imageGeometry.js common/colorQuantize.js common/gifWriter.js "$T/"
+cp test/magicCircle.test.mjs "$T/"
+printf '{"type":"module"}' > "$T/package.json"
+
+ELECTRON_RUN_AS_NODE=1 "$CODE" "$T/magicCircle.test.mjs"
+```
+
+这套**不需要 `pngWriter` / `pako`** —— 魔法阵只生成 RGBA，写出 PNG 字节完全在平台层里做。
+
+第 10 节会打印性能基准（各尺寸的渲染耗时、默认档 GIF 的组装耗时与体积），是判断
+「能不能再往上调帧数 / 边长」的依据 —— 改动画参数后对比一下，别凭感觉调。
+
+### 不要退化掉的几处
+
+- **覆盖率是 `clamp(halfWidth + 0.5 - d, 0, 1)`，斜坡宽度不能改**（第 2 节）。这个形状不是
+  随手取的：它让一条线的有效宽度**恰好等于 `2 × halfWidth`**，抗锯齿只把边缘抹匀、不改粗细。
+  斜坡写宽或写窄，线会静默地变粗变细 —— 单张图上看不出来，只有量面积才发现。第 2 节量的是
+  「长度加倍时面积增量 = 增量长度 × 有效宽度」，圆帽的贡献被相减消掉，不依赖任何形状假设。
+- **模糊必须走三段缓冲，纵向那一趟不能边读边写**（第 5 节）。滑动窗口要减掉的那一行如果
+  就是自己刚写过的，和值会被自己的输出污染。第 5 节的「横竖对称」和「峰值回到原位置」
+  是专门盯这个的 —— 单个亮点的模糊结果必须各向同性。
+- **辉光是按模糊结果的峰值归一化到 `peak`，不是乘一个系数再夹到 1**（第 5 节）。夹取会让
+  光晕在芯线附近整片饱和，变成「一条更糊的实心线 + 硬边截止」，实测曲线是 255,255,27,0
+  这种断崖。第 5 节量的是**线性度**（线外同一像素的 alpha 与 peak 成正比、且不顶到 255），
+  饱和会立刻打破它。
+- **墨迹的纵向范围必须落在 0.1 网格上**（第 6 节）。主干和斜枝都要过 `snap()`，取 0.05 / 0.95
+  会被吸附成 0.1 / 0.9，主干就比枝短一截（踩过一次）。
+- **每层的 `spin` 必须是整数圈/循环**（第 7 节）。这是旋转 GIF 无缝的**构造性**保证：
+  循环走完每层恰好转整数圈，自然回到起点。改成小数转速，首尾帧会差出一个角度，接缝处会跳。
+- **渲染函数只接受种子，不许摸 `Math.random`**（第 1 节）。「同种子同图」是这个工具能被
+  这样测试的唯一理由，也是用户看到种子号之后能复现的前提。
+
 ## 为什么值得留着
 
 这几个模块是纯函数、无平台依赖，所以能在 App / 小程序 / H5 之外直接验证。
