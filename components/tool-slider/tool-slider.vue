@@ -8,13 +8,22 @@
 		<!--
 			命中区。**整条轨道都能按，按下即跳到手指所在的位置** —— 原生 <slider> 只有那个
 			十几像素的小圆点能按、轨道又细，手指按不准，这正是「不好拖」的根因。
-			.stop 在小程序端编译成 catchtouchmove（挡住页面跟着滚），.prevent 在 H5 / App 端
-			调 preventDefault（同一个作用）—— 三端各取所需，缺一个就有一端会滚。
+
+			阻止页面跟着滚有三道，缺一道就有一端会滚：
+			1. CSS 的 touch-action: none（见 .ts-hit）—— 让浏览器压根不在这个区域启动滚动，
+			   这是**正解**，也是唯一能让 touchmove 保持可取消的一道；
+			2. .stop 在小程序端编译成 catchtouchmove；
+			3. 处理函数里**有判断地**调 preventDefault（见 stopScroll）。
+
+			这里刻意**不用 .prevent 修饰符**：它无条件调 preventDefault，而浏览器一旦已经开始
+			滚动，那次 touchmove 的 cancelable 就是 false、preventDefault 会被忽略，Chrome 还会
+			打一条 "Ignored attempt to cancel a touchmove event with cancelable=false" 的警告
+			（用户报过）。而且那条警告不只是噪音 —— 它说明页面真的有机会跟着滚。
 		-->
 		<view
 			class="ts-hit"
-			@touchstart.stop.prevent="onTouchStart"
-			@touchmove.stop.prevent="onTouchMove"
+			@touchstart.stop="onTouchStart"
+			@touchmove.stop="onTouchMove"
 			@touchend="onTouchEnd"
 			@touchcancel="onTouchEnd"
 		>
@@ -37,6 +46,23 @@
 	// 但万一 .in() 在某个端退化成页面级查询，按 id 选也只会选中自己那条轨道，
 	// 不会像类选择器那样选中页面上第一个滑块而整体错位
 	let railSeed = 0
+
+/**
+ * 拦掉触摸的默认动作（滚动）。
+ *
+ * **必须先判 cancelable**：浏览器已经开始滚动之后，那次 touchmove 是「不可取消」的，
+ * 这时候调 preventDefault 会被静默忽略，Chrome 还会打一条
+ * "Ignored attempt to cancel a touchmove event with cancelable=false" 的警告。
+ * 判一下既消掉警告，也不改变真正能拦住的那些场合的行为。
+ *
+ * App 端的 uni 事件对象上 cancelable 可能是 undefined —— 那时按「可取消」处理，
+ * 和加这个判断之前的行为一致。
+ */
+function stopScroll(event) {
+	if (!event || typeof event.preventDefault !== 'function') return
+	if (event.cancelable === false) return
+	event.preventDefault()
+}
 
 	/**
 	 * 通用滑块：受控（value + changing/change），观感按项目 UI 规范来。
@@ -135,6 +161,7 @@
 			},
 
 			onTouchStart(event) {
+				stopScroll(event)
 				this.dragging = true
 				this.moved = false
 				// 原地按一下不算改过值，省掉一次没必要的全分辨率重算
@@ -157,6 +184,7 @@
 			},
 
 			onTouchMove(event) {
+				stopScroll(event)
 				if (!this.dragging) return
 				const clientX = this.touchClientX(event)
 				if (clientX === null) return
@@ -232,6 +260,11 @@
 		display: flex;
 		flex-direction: row;
 		align-items: center;
+		/* 让浏览器**压根不在这一块启动手势**（滚动、双击缩放）。
+		   这是阻止「拖滑块时页面跟着滚」的正解：一旦浏览器已经开始滚动，那次 touchmove
+		   就变成不可取消的，处理函数里的 preventDefault 会被无视、还会打一条控制台警告。
+		   小程序端不支持 touch-action，那边靠 @touchmove.stop 编译成的 catchtouchmove。 */
+		touch-action: none;
 	}
 
 	/* 注意不要加 overflow: hidden，会把握把裁掉 —— 已填充段自己用圆角收口 */

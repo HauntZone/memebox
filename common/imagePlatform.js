@@ -18,6 +18,7 @@
 import { coverRect, resizeCoverImage } from './imageGeometry.js'
 import { encodePng } from './pngWriter.js'
 import { decodePng } from './pngReader.js'
+import { planGlyphCanvas, glyphCellCenter, sliceGlyphCells } from './magicText.js'
 
 // ---------------------------------------------------------------- 平台判定
 
@@ -362,6 +363,130 @@ function readPixelsApp(path, target, source, canvasId) {
 	})
 }
 // #endif
+
+// ---------------------------------------------------------------- 字形光栅化
+//
+// 项目里不能 vendor 字体文件（中文字体几 MB 起、是二进制），所以中文文字只能借平台的
+// 文字渲染能力画到 canvas 上再读回像素。**但 canvas 只被关在这一步**：把「一个字 →
+// 一张小 RGBA 贴图」光栅化一次，之后排版、沿环旋转、辉光、合成、逐帧全是纯逻辑。
+//
+// 两个刻意的选择：
+// 1. **方格子，不用 measureText**。所有字都画在 cellSize × cellSize 的方格里居中，
+//    于是不需要量文字宽度 —— 少一个各端行为不一致的 API，而且中文本来就是方的。
+// 2. **画成白色蒙版**，颜色在贴图时用 tint 上（见 magicShape.stampImage）。
+//    否则换个配色就得重新光栅化一遍。
+//
+// 网格怎么排、格子怎么切、墨迹怎么收紧都是纯计算，放在 magicText.js 里（那边可测）；
+// 这里只留「把字画到画布上」这一步。
+
+// #ifdef H5
+function rasterizeGlyphsWeb(plan) {
+	return new Promise((resolve, reject) => {
+		try {
+			const canvas = document.createElement('canvas')
+			canvas.width = plan.width
+			canvas.height = plan.height
+			const ctx = canvas.getContext('2d')
+			ctx.clearRect(0, 0, plan.width, plan.height)
+			ctx.fillStyle = '#FFFFFF'
+			ctx.font = 'bold ' + Math.round(plan.cellSize * 0.86) + 'px sans-serif'
+			ctx.textAlign = 'center'
+			ctx.textBaseline = 'middle'
+			for (let i = 0; i < plan.chars.length; i++) {
+				const at = glyphCellCenter(plan, i)
+				ctx.fillText(plan.chars[i], at.x, at.y)
+			}
+			const imageData = ctx.getImageData(0, 0, plan.width, plan.height)
+			resolve(sliceGlyphCells(imageData.data, plan))
+		} catch (error) {
+			reject(new Error('光栅化字形失败：' + describeError(error)))
+		}
+	})
+}
+// #endif
+
+// #ifdef MP-WEIXIN
+function rasterizeGlyphsWeixin(plan, instance, canvasId) {
+	return getCanvasNode(instance, canvasId).then(
+		(canvas) =>
+			new Promise((resolve, reject) => {
+				try {
+					canvas.width = plan.width
+					canvas.height = plan.height
+					const ctx = canvas.getContext('2d')
+					ctx.clearRect(0, 0, plan.width, plan.height)
+					ctx.fillStyle = '#FFFFFF'
+					ctx.font = 'bold ' + Math.round(plan.cellSize * 0.86) + 'px sans-serif'
+					ctx.textAlign = 'center'
+					ctx.textBaseline = 'middle'
+					for (let i = 0; i < plan.chars.length; i++) {
+						const at = glyphCellCenter(plan, i)
+						ctx.fillText(plan.chars[i], at.x, at.y)
+					}
+					const imageData = ctx.getImageData(0, 0, plan.width, plan.height)
+					resolve(sliceGlyphCells(imageData.data, plan))
+				} catch (error) {
+					reject(new Error('光栅化字形失败：' + describeError(error)))
+				}
+			})
+	)
+}
+// #endif
+
+// #ifdef APP-PLUS
+function rasterizeGlyphsApp(plan, canvasId) {
+	return new Promise((resolve, reject) => {
+		// 旧版 CanvasContext 是 setter 风格，没有 ctx.font —— 必须用 setFontSize 那一套
+		// （uqrcode.js 里的 polyfill 就是这个原因，这里照同一套写）。
+		const ctx = uni.createCanvasContext(canvasId)
+		ctx.clearRect(0, 0, plan.width, plan.height)
+		ctx.setFillStyle('#FFFFFF')
+		ctx.setFontSize(Math.round(plan.cellSize * 0.86))
+		ctx.setTextAlign('center')
+		ctx.setTextBaseline('middle')
+
+		for (let i = 0; i < plan.chars.length; i++) {
+			const at = glyphCellCenter(plan, i)
+			ctx.fillText(plan.chars[i], at.x, at.y)
+		}
+
+		ctx.draw(false, () => {
+			uni.canvasGetImageData({
+				canvasId: canvasId,
+				x: 0,
+				y: 0,
+				width: plan.width,
+				height: plan.height,
+				success: (res) => {
+					const data = res.data instanceof Uint8ClampedArray ? res.data : new Uint8ClampedArray(res.data)
+					resolve(sliceGlyphCells(data, plan))
+				},
+				fail: (err) => reject(new Error('光栅化字形失败：' + describeError(err)))
+			})
+		})
+	})
+}
+// #endif
+
+/**
+ * 把文本里非 ASCII 的字符光栅化成字形贴图：`{ 字: {width, height, data} }`。
+ *
+ * 调用方要**先按 planGlyphCanvas 的尺寸 prepareCanvas**（App 端旧版 canvas 的像素尺寸
+ * 跟着 CSS 走，两边必须是同一个尺寸，否则读到的是错像素）。
+ *
+ * 返回的是**白色蒙版**，颜色在贴图时上。一次把整串字画在一张画布上只读一次 ——
+ * 20 个字读 20 次 getImageData 是没必要的。
+ */
+export function rasterizeGlyphs({ chars, cellSize, instance, canvasId }) {
+	const plan = planGlyphCanvas(chars || '', cellSize)
+	if (!plan.chars.length) return Promise.resolve({})
+
+	const platform = platformName()
+	if (platform === 'web') return rasterizeGlyphsWeb(plan)
+	if (platform === 'mp-weixin') return rasterizeGlyphsWeixin(plan, instance, canvasId)
+	if (platform === 'app') return rasterizeGlyphsApp(plan, canvasId)
+	return Promise.reject(new Error('当前平台还不支持光栅化字形：' + platform))
+}
 
 /**
  * 从文件字节直接解 PNG，绕开各端的 canvas。

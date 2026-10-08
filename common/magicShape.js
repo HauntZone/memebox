@@ -109,7 +109,6 @@ export function strokeRing(target, { radiusMap, radius, halfWidth, color, alpha 
 		throw new Error('radiusMap 尺寸与画布不符，应由 makeRadiusMap 按同一 size 生成')
 	}
 
-	const data = target.data
 	const center = (n - 1) / 2
 	const reach = halfWidth + 0.5
 	const outer = radius + reach
@@ -353,40 +352,189 @@ export function composeOver({ base, top }) {
  * 变成「一条更糊的实心线 + 硬边截止」，比不做辉光还难看（踩过一次，量出来的曲线是
  * 255,255,27,0 这种断崖）。归一化之后峰值精确可控，而且中间的渐变关系原样保留。
  */
-export function applyGlow({ image, color, peak, radius }) {
+export function applyGlow({ image, color, peak, radius, underlay = null }) {
 	// 没有这道闸，写错的 peak 会一路 NaN 下去、被 Uint8ClampedArray 静默夹成 0 ——
 	// 症状是「辉光设了但一点都没有」，而不会报错。
 	if (!Number.isFinite(peak)) {
 		throw new Error('applyGlow 的 peak 必须是有限数值（0 表示不加辉光）')
 	}
 
-	const blurred = blurAlpha(image, radius)
 	const n = image.width
+	let base = { width: n, height: n, data: new Uint8ClampedArray(image.data.length) }
 
-	let max = 0
-	for (let i = 0; i < blurred.length; i++) {
-		if (blurred[i] > max) max = blurred[i]
+	if (peak > 0) {
+		const blurred = blurAlpha(image, radius)
+		let max = 0
+		for (let i = 0; i < blurred.length; i++) {
+			if (blurred[i] > max) max = blurred[i]
+		}
+
+		if (max > 0) {
+			const scale = clamp01(peak) / max
+			for (let i = 0, p = 0; i < blurred.length; i++, p += 4) {
+				const a = clamp01(blurred[i] * scale)
+				if (a <= 0) continue
+				base.data[p] = color[0]
+				base.data[p + 1] = color[1]
+				base.data[p + 2] = color[2]
+				base.data[p + 3] = a * 255
+			}
+		}
 	}
 
-	const glow = new Uint8ClampedArray(image.data.length)
-	if (max <= 0 || peak <= 0) {
-		return composeOver({ base: { width: n, height: n, data: glow }, top: image })
+	// 合成顺序：辉光 → underlay → 线条。underlay 就是「压在光晕之上、线条之下」的那层，
+	// 图片走这里 —— 这样阵的线条把图框住，而不是糊在脸上。
+	if (underlay) base = composeOver({ base, top: underlay })
+	return composeOver({ base, top: image })
+}
+
+/**
+ * 双线性采样一个 RGBA 像素，越界当透明。
+ *
+ * 累积的是**预乘**颜色（rgb × a），最后再除回去。直接对 rgb 加权会在半透明的边缘
+ * 混进一圈黑边 —— 因为透明像素的 rgb 通常是 0，它被算进去就把边缘拉黑了。
+ * 照片裁圆、字形贴图这类「边上带 alpha」的输入全靠这一点。
+ */
+function sampleBilinear(image, sx, sy, out) {
+	const w = image.width
+	const h = image.height
+	const x0 = Math.floor(sx)
+	const y0 = Math.floor(sy)
+	const fx = sx - x0
+	const fy = sy - y0
+
+	let wa = 0
+	let wr = 0
+	let wg = 0
+	let wb = 0
+
+	for (let j = 0; j <= 1; j++) {
+		const py = y0 + j
+		if (py < 0 || py >= h) continue
+		const wy = j ? fy : 1 - fy
+		if (wy <= 0) continue
+
+		for (let i = 0; i <= 1; i++) {
+			const px = x0 + i
+			if (px < 0 || px >= w) continue
+			const weight = wy * (i ? fx : 1 - fx)
+			if (weight <= 0) continue
+
+			const p = (py * w + px) * 4
+			const a = image.data[p + 3] * weight
+			wa += a
+			wr += image.data[p] * a
+			wg += image.data[p + 1] * a
+			wb += image.data[p + 2] * a
+		}
 	}
 
-	const scale = clamp01(peak) / max
-	for (let i = 0, p = 0; i < blurred.length; i++, p += 4) {
-		const a = clamp01(blurred[i] * scale)
-		if (a <= 0) continue
-		glow[p] = color[0]
-		glow[p + 1] = color[1]
-		glow[p + 2] = color[2]
-		glow[p + 3] = a * 255
+	if (wa <= 0) {
+		out[0] = 0
+		out[1] = 0
+		out[2] = 0
+		out[3] = 0
+		return
 	}
 
-	return composeOver({
-		base: { width: n, height: n, data: glow },
-		top: image
-	})
+	out[0] = wr / wa
+	out[1] = wg / wa
+	out[2] = wb / wa
+	out[3] = wa
+}
+
+/**
+ * 把一张 RGBA 贴图**缩放 + 旋转**地印到画布上，以 (cx, cy) 为中心。
+ *
+ * width 是贴到目标上的宽度（像素），高度按原图比例推出来。angle 是顺时针弧度，
+ * 定义成「把贴图自身的 x 轴转到 (cos angle, sin angle)」—— 文字环正靠这个把每个字的
+ * 「上」摆到径向外侧（见 magicText.js 里 angle = 角度 + π/2 的推导）。
+ *
+ * 采样用预乘双线性（见 sampleBilinear），所以贴图边缘不会出现黑边。
+ */
+export function stampImage(target, { image, cx, cy, width, angle = 0, alpha = 1, tint = null }) {
+	if (!image || !image.data || width <= 0 || alpha <= 0) return target
+
+	const destW = width
+	const destH = width * (image.height / image.width)
+	const halfW = destW / 2
+	const halfH = destH / 2
+
+	const cos = Math.cos(angle)
+	const sin = Math.sin(angle)
+
+	// 旋转后的包围盒（|cos|·w + |sin|·h 是旋转矩形在轴上的半投影长度）
+	const extentX = Math.abs(cos) * halfW + Math.abs(sin) * halfH
+	const extentY = Math.abs(sin) * halfW + Math.abs(cos) * halfH
+
+	const n = target.width
+	const minX = Math.max(0, Math.floor(cx - extentX - 1))
+	const maxX = Math.min(n - 1, Math.ceil(cx + extentX + 1))
+	const minY = Math.max(0, Math.floor(cy - extentY - 1))
+	const maxY = Math.min(n - 1, Math.ceil(cy + extentY + 1))
+
+	const sample = [0, 0, 0, 0]
+
+	for (let y = minY; y <= maxY; y++) {
+		const dy = y - cy
+		const row = y * n
+
+		for (let x = minX; x <= maxX; x++) {
+			const dx = x - cx
+
+			// 逆旋转回到贴图的局部坐标
+			const localX = dx * cos + dy * sin
+			const localY = -dx * sin + dy * cos
+
+			// 局部坐标 → 贴图像素坐标。
+			//
+			// 贴图的**外缘**要落在源图首尾像素的外缘（-0.5 和 w-0.5），不是像素中心（0 和 w-1）。
+			// 映射到中心的话贴出来会比预期大一个像素，而且边缘没有渐隐 —— 因为第一个像素会被
+			// 整个取到、alpha 直接顶到满，看上去是硬边（踩过一次，靠「转整整一圈等于不转」
+			// 那条断言暴露出来的：两个角度的包围盒差一个像素，就露馅了）。
+			const sx = ((localX / halfW) + 1) * (image.width / 2) - 0.5
+			const sy = ((localY / halfH) + 1) * (image.height / 2) - 0.5
+
+			sampleBilinear(image, sx, sy, sample)
+			const sa = (sample[3] / 255) * alpha
+			if (sa <= 0) continue
+
+			// tint 用来给「白色蒙版」类的贴图上色（字形就是这么用的），
+			// 照片之类自带颜色的贴图不传，保留原色。
+			if (tint) blendPixel(target.data, (row + x) * 4, tint[0], tint[1], tint[2], sa)
+			else blendPixel(target.data, (row + x) * 4, sample[0], sample[1], sample[2], sa)
+		}
+	}
+
+	return target
+}
+
+/**
+ * 把一张图裁成圆形（以图心为圆心，radius 是像素），圆外 alpha 归零。
+ *
+ * 边缘用和线条同一套覆盖率斜坡，所以不会有锯齿；feather 是软边的宽度（像素），
+ * 给大一点就是羽化。**不动入参，返回新图。**
+ */
+export function clipCircle(image, { radius, feather = 1 }) {
+	const n = image.width
+	const m = image.height
+	const cx = (n - 1) / 2
+	const cy = (m - 1) / 2
+	const soft = Math.max(0.001, feather)
+	const out = new Uint8ClampedArray(image.data)
+
+	for (let y = 0; y < m; y++) {
+		const dy = y - cy
+		for (let x = 0; x < n; x++) {
+			const dx = x - cx
+			const d = Math.sqrt(dx * dx + dy * dy)
+			const cov = clamp01((radius - d) / soft + 0.5)
+			const p = (y * n + x) * 4 + 3
+			out[p] = out[p] * cov
+		}
+	}
+
+	return { width: n, height: m, data: out }
 }
 
 /**

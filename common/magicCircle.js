@@ -17,9 +17,12 @@
  */
 
 import {
-	createCanvas, makeRadiusMap, strokeRing, strokePolyline, strokeDisc, applyGlow
+	createCanvas, makeRadiusMap, strokeRing, strokePolyline, strokeDisc,
+	applyGlow, stampImage, clipCircle
 } from './magicShape.js'
 import { buildRune, runeBounds } from './magicRunes.js'
+import { placeTextOnRing } from './magicText.js'
+import { pasteOver, resizeCoverImage, downsampleImage } from './imageGeometry.js'
 import { quantizeFrames } from './colorQuantize.js'
 import { encodeGif } from './gifWriter.js'
 
@@ -72,6 +75,26 @@ export const MAGIC_LIMITS = {
 	glowDefault: 60,
 	runeDensityRange: [0, 100],
 	runeDensityDefault: 50,
+
+	// 文字环。半径与字高都是归一化值（阵半径 = 1），滑块给整数档。
+	// 默认 90 是贴着外圈内侧那条空档 —— 经典铭文的位置，也最不容易和星形打架。
+	textRadiusRange: [30, 100],
+	textRadiusDefault: 90,
+	textSizeRange: [3, 18],
+	textSizeDefault: 8,
+
+	// 中心图：size 是直径的归一化值（0.5 = 半个阵半径）
+	centerSizeRange: [20, 120],
+	centerSizeDefault: 52,
+
+	// 环绕图。默认 66 落在多数预设的空档里（符文带和中心星形之间）；
+	// 和文字环同时开时两者会抢位置，用半径滑块挪开。
+	ringCountRange: [2, 16],
+	ringCountDefault: 6,
+	ringRadiusRange: [40, 100],
+	ringRadiusDefault: 66,
+	ringSizeRange: [4, 24],
+	ringSizeDefault: 11,
 
 	colors: MAGIC_COLORS,
 	presetKeys: ['pentagram', 'hexagram', 'clock', 'element', 'chaos', 'hallow']
@@ -245,16 +268,43 @@ export function normalizeParams(input, fallbackColorIndex = 0) {
 		return Math.min(high, Math.max(low, Math.round(n)))
 	}
 
+	// 转速只能是整数圈/循环 —— 无缝循环靠的就是这一条（见 renderFrames）
+	const integerOr = function (value, fallback) {
+		const n = Number(value)
+		if (!Number.isFinite(n)) return fallback
+		return Math.min(2, Math.max(-2, Math.round(n)))
+	}
+
 	const colorIndex = Number.isInteger(p.colorIndex) && p.colorIndex >= 0 && p.colorIndex < MAGIC_COLORS.length
 		? p.colorIndex
 		: fallbackColorIndex
+
+	const text = p.text || {}
+	const center = p.center || {}
+	const ring = p.ring || {}
 
 	return {
 		complexity: clamp(p.complexity, MAGIC_LIMITS.complexityRange[0], MAGIC_LIMITS.complexityRange[1], MAGIC_LIMITS.complexityDefault),
 		lineWidth: clamp(p.lineWidth, MAGIC_LIMITS.lineWidthRange[0], MAGIC_LIMITS.lineWidthRange[1], MAGIC_LIMITS.lineWidthDefault),
 		glow: clamp(p.glow, MAGIC_LIMITS.glowRange[0], MAGIC_LIMITS.glowRange[1], MAGIC_LIMITS.glowDefault),
 		runeDensity: clamp(p.runeDensity, MAGIC_LIMITS.runeDensityRange[0], MAGIC_LIMITS.runeDensityRange[1], MAGIC_LIMITS.runeDensityDefault),
-		colorIndex
+		colorIndex,
+		text: {
+			radius: clamp(text.radius, MAGIC_LIMITS.textRadiusRange[0], MAGIC_LIMITS.textRadiusRange[1], MAGIC_LIMITS.textRadiusDefault) / 100,
+			size: clamp(text.size, MAGIC_LIMITS.textSizeRange[0], MAGIC_LIMITS.textSizeRange[1], MAGIC_LIMITS.textSizeDefault) / 100,
+			spin: integerOr(text.spin, 0)
+		},
+		center: {
+			size: clamp(center.size, MAGIC_LIMITS.centerSizeRange[0], MAGIC_LIMITS.centerSizeRange[1], MAGIC_LIMITS.centerSizeDefault) / 100
+		},
+		ring: {
+			count: clamp(ring.count, MAGIC_LIMITS.ringCountRange[0], MAGIC_LIMITS.ringCountRange[1], MAGIC_LIMITS.ringCountDefault),
+			radius: clamp(ring.radius, MAGIC_LIMITS.ringRadiusRange[0], MAGIC_LIMITS.ringRadiusRange[1], MAGIC_LIMITS.ringRadiusDefault) / 100,
+			size: clamp(ring.size, MAGIC_LIMITS.ringSizeRange[0], MAGIC_LIMITS.ringSizeRange[1], MAGIC_LIMITS.ringSizeDefault) / 100,
+			spin: integerOr(ring.spin, 0),
+			// same = 同一张图填满所有槽位；cycle = 多张图依次排开，不够就循环
+			mode: ring.mode === 'cycle' ? 'cycle' : 'same'
+		}
 	}
 }
 
@@ -262,7 +312,7 @@ export function normalizeParams(input, fallbackColorIndex = 0) {
  * 预设 + 种子 + 参数 → 整张图的描述（纯数据）。
  * 这一步不做任何渲染，所以可以单独测它的结构（层数、半径是否落在阶梯上、有没有转速）。
  */
-export function createFigure({ presetKey, seed, params }) {
+export function createFigure({ presetKey, seed, params, content }) {
 	const preset = MAGIC_PRESETS[presetKey]
 	if (!preset) throw new Error('未知的魔法阵预设：' + presetKey)
 
@@ -289,6 +339,45 @@ export function createFigure({ presetKey, seed, params }) {
 		}
 	}
 
+	// 内容层（文字 / 图片）：由页面注入，**不参与种子派生**。
+	// 它们不进预设、也不受复杂度滑块影响 —— 用户明确传进来的东西不该被随机性吃掉。
+	const source = content || {}
+	let textChars = 0
+	let ringSlots = 0
+
+	if (source.text && source.text.glyphs && source.text.glyphs.length) {
+		textChars = source.text.glyphs.length
+		layers.push({
+			kind: 'text',
+			tier: 0,
+			glyphs: source.text.glyphs,
+			width: 1,
+			spin: resolved.text.spin,
+			// 居中的角度取正上方（-π/2）。用 0 的话铭文会排在右侧、竖着读，很别扭。
+			rotation: -Math.PI / 2,
+			radius: resolved.text.radius,
+			size: resolved.text.size
+		})
+	}
+
+	if (source.center && source.center.image) {
+		layers.push({ kind: 'centerImage', tier: 0, image: source.center.image, size: resolved.center.size })
+	}
+
+	if (source.ring && source.ring.images && source.ring.images.length) {
+		ringSlots = resolved.ring.count
+		layers.push({
+			kind: 'ringImages',
+			tier: 0,
+			images: source.ring.images,
+			count: resolved.ring.count,
+			radius: resolved.ring.radius,
+			size: resolved.ring.size,
+			spin: resolved.ring.spin,
+			mode: resolved.ring.mode
+		})
+	}
+
 	return {
 		presetKey,
 		presetName: preset.name,
@@ -300,7 +389,10 @@ export function createFigure({ presetKey, seed, params }) {
 		stats: {
 			layerCount: layers.length,
 			runeCount: layers.reduce(function (sum, layer) { return sum + (layer.kind === 'runes' ? layer.count : 0) }, 0),
-			spinningLayers: layers.filter(function (layer) { return layer.spin !== 0 }).length
+			spinningLayers: layers.filter(function (layer) { return layer.spin !== 0 }).length,
+			textChars,
+			centerImage: source.center && source.center.image ? 1 : 0,
+			ringSlots
 		}
 	}
 }
@@ -318,6 +410,56 @@ function polarPoints(cx, cy, radius, angles) {
 		points.push([cx + radius * Math.cos(angles[i]), cy + radius * Math.sin(angles[i])])
 	}
 	return points
+}
+
+/**
+ * 按渲染尺寸缩放并裁圆的结果缓存。
+ *
+ * 一帧里同一张图可能被问好几次（环绕图每个槽位一次），一个 GIF 又是十几帧 —— 每次都重新
+ * 缩放裁剪是白烧。缓存的键是「图片对象 + 像素尺寸」，图片换了或尺寸变了自然失效。
+ * 用 WeakMap 是为了页面换图之后旧图能被回收，不会一直挂在缓存里。
+ */
+const preparedImages = new WeakMap()
+
+function prepareCircleImage(image, px) {
+	let bySize = preparedImages.get(image)
+	if (!bySize) {
+		bySize = new Map()
+		preparedImages.set(image, bySize)
+	}
+
+	const cached = bySize.get(px)
+	if (cached) return cached
+
+	const sized = resizeCoverImage(image, px, px)
+	if (!sized) return null
+
+	const prepared = clipCircle(sized, { radius: px / 2, feather: Math.max(1, px * 0.012) })
+	if (bySize.size > 12) bySize.clear()
+	bySize.set(px, prepared)
+	return prepared
+}
+
+/** 位图字形的降采样缓存。GIF 只有 280px，字高会缩到十几个像素，必须先块平均再贴。 */
+const preparedGlyphs = new WeakMap()
+
+function prepareGlyph(image, destWidth) {
+	const key = Math.max(2, Math.round(destWidth))
+
+	let bySize = preparedGlyphs.get(image)
+	if (!bySize) {
+		bySize = new Map()
+		preparedGlyphs.set(image, bySize)
+	}
+
+	const cached = bySize.get(key)
+	if (cached) return cached
+
+	// 双线性裸缩在缩得狠的时候会走样（字会糊成一团），超过 1.6 倍就先块平均降一次
+	const prepared = image.width / key > 1.6 ? (downsampleImage(image, key) || image) : image
+	if (bySize.size > 24) bySize.clear()
+	bySize.set(key, prepared)
+	return prepared
 }
 
 function drawRing(target, layer, ctx) {
@@ -439,18 +581,105 @@ function drawRunes(target, layer, ctx) {
 	}
 }
 
-const DRAWERS = { ring: drawRing, star: drawStar, ticks: drawTicks, runes: drawRunes, arcs: drawArcs }
+/**
+ * 文字环。描边字形和位图字形都画进**线条层** —— 文字是要发光的，和阵的线条同质。
+ */
+function drawText(target, layer, ctx) {
+	const layout = placeTextOnRing({
+		glyphs: layer.glyphs,
+		radius: layer.radius,
+		size: layer.size,
+		rotation: layerAngle(layer, ctx.time)
+	})
+
+	const halfWidth = ctx.halfWidth * layer.width
+	for (let i = 0; i < layout.strokes.length; i++) {
+		const source = layout.strokes[i]
+		const points = []
+		for (let p = 0; p < source.length; p++) {
+			points.push([ctx.cx + source[p][0] * ctx.scale, ctx.cy + source[p][1] * ctx.scale])
+		}
+		strokePolyline(target, { points, halfWidth, color: ctx.color })
+	}
+
+	for (let i = 0; i < layout.stamps.length; i++) {
+		const stamp = layout.stamps[i]
+		const width = stamp.width * ctx.scale
+		stampImage(target, {
+			image: prepareGlyph(stamp.image, width),
+			cx: ctx.cx + stamp.cx * ctx.scale,
+			cy: ctx.cy + stamp.cy * ctx.scale,
+			width,
+			angle: stamp.angle,
+			// 位图字形是白色蒙版，得在这里上成阵的颜色
+			tint: ctx.color
+		})
+	}
+
+	return target
+}
+
+function drawCenterImage(target, layer, ctx) {
+	const px = Math.max(2, Math.round(layer.size * ctx.scale))
+	const prepared = prepareCircleImage(layer.image, px)
+	if (!prepared) return target
+	return pasteOver({
+		base: target,
+		top: prepared,
+		x: Math.round(ctx.cx - px / 2),
+		y: Math.round(ctx.cy - px / 2)
+	})
+}
+
+function drawRingImages(target, layer, ctx) {
+	const px = Math.max(2, Math.round(layer.size * ctx.scale))
+	const base = layerAngle(layer, ctx.time)
+	const ringRadius = layer.radius * ctx.scale
+	let out = target
+
+	for (let i = 0; i < layer.count; i++) {
+		// same = 同一张图填满所有槽位；cycle = 多张依次排开，不够就循环
+		const source = layer.mode === 'cycle'
+			? layer.images[i % layer.images.length]
+			: layer.images[0]
+		if (!source) continue
+
+		const prepared = prepareCircleImage(source, px)
+		if (!prepared) continue
+
+		const theta = base + (i * TAU) / layer.count
+		out = stampImage(out, {
+			image: prepared,
+			cx: ctx.cx + ringRadius * Math.cos(theta),
+			cy: ctx.cy + ringRadius * Math.sin(theta),
+			width: px,
+			angle: theta + Math.PI / 2
+		})
+	}
+
+	return out
+}
+
+const DRAWERS = {
+	ring: drawRing, star: drawStar, ticks: drawTicks, runes: drawRunes,
+	arcs: drawArcs, text: drawText
+}
 
 /**
  * 渲染一帧。time 是循环相位（0~1）：0 和 1 必须给出逐字节相同的结果，
  * 这是「循环无缝」的定义，由整数 spin 保证（见 renderFrames）。
+ *
+ * **两类图层分头画，最后按「辉光 → 图片 → 线条」合成。** 图片垫在线条之下是有意的：
+ * 阵的线条把图框住，而不是糊在脸上。
  */
 export function renderFigure(figure, { size, time = 0 }) {
 	const width = Math.max(8, Math.round(size))
 	const scale = (width / 2) * RADIUS_SPAN
 	const params = figure.params
 
-	const canvas = createCanvas({ size: width })
+	const lines = createCanvas({ size: width })
+	let images = null
+
 	const ctx = {
 		cx: (width - 1) / 2,
 		cy: (width - 1) / 2,
@@ -464,17 +693,26 @@ export function renderFigure(figure, { size, time = 0 }) {
 
 	for (let i = 0; i < figure.layers.length; i++) {
 		const layer = figure.layers[i]
+
+		if (layer.kind === 'centerImage' || layer.kind === 'ringImages') {
+			if (!images) images = createCanvas({ size: width })
+			images = layer.kind === 'centerImage'
+				? drawCenterImage(images, layer, ctx)
+				: drawRingImages(images, layer, ctx)
+			continue
+		}
+
 		const draw = DRAWERS[layer.kind]
-		if (draw) draw(canvas, layer, ctx)
+		if (draw) draw(lines, layer, ctx)
 	}
 
-	if (params.glow <= 0) return canvas
-
+	// 不能因为 glow = 0 就提前返回：图片仍要走合成
 	return applyGlow({
-		image: canvas,
+		image: lines,
 		color: figure.color,
 		peak: (params.glow / 100) * GLOW_PEAK_MAX,
-		radius: GLOW_SPREAD * scale
+		radius: GLOW_SPREAD * scale,
+		underlay: images
 	})
 }
 

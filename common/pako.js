@@ -425,14 +425,23 @@ const tr_static_init = () => {
   // do check in _tr_init()
   //if (static_init_done) return;
 
-  /* For some embedded targets, global variables are not initialized: */
-/*#ifdef NO_INIT_GLOBAL_POINTERS
-  static_l_desc.static_tree = static_ltree;
-  static_l_desc.extra_bits = extra_lbits;
-  static_d_desc.static_tree = static_dtree;
-  static_d_desc.extra_bits = extra_dbits;
-  static_bl_desc.extra_bits = extra_blbits;
-#endif*/
+  /* For some embedded targets, global variables are not initialized.
+     Upstream zlib guards the following static_desc assignments with a
+     preprocessor conditional (NO_INIT_GLOBAL_POINTERS); pako's JS port keeps
+     them commented out.
+
+     The directive markers were stripped here on purpose, and MUST stay
+     stripped: HBuilderX's conditional-compilation scanner also reads directive
+     markers inside block comments, and the closing one followed by the comment
+     terminator did not pair up, which failed the whole build. The code below
+     was inert, so removing the markers changes nothing at runtime.
+     Do not write directive markers back into this comment.
+     Re-apply the same edit after upgrading pako — see common/pako.LICENSE.md. */
+  //   static_l_desc.static_tree = static_ltree;
+  //   static_l_desc.extra_bits = extra_lbits;
+  //   static_d_desc.static_tree = static_dtree;
+  //   static_d_desc.extra_bits = extra_dbits;
+  //   static_bl_desc.extra_bits = extra_blbits;
 
   /* Initialize the mapping length (0..255) -> length code (0..28) */
   length = 0;

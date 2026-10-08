@@ -91,8 +91,8 @@ ELECTRON_RUN_AS_NODE=1 "$CODE" "$T/petpet.test.mjs"
 CODE="/c/Users/HauntZone/AppData/Local/Programs/Microsoft VS Code/Code.exe"
 
 T=$(mktemp -d)
-cp common/magicShape.js common/magicRunes.js common/magicCircle.js \
-   common/imageGeometry.js common/colorQuantize.js common/gifWriter.js "$T/"
+cp common/magicShape.js common/magicRunes.js common/magicFont.js common/magicText.js \
+   common/magicCircle.js common/imageGeometry.js common/colorQuantize.js common/gifWriter.js "$T/"
 cp test/magicCircle.test.mjs "$T/"
 printf '{"type":"module"}' > "$T/package.json"
 
@@ -100,6 +100,14 @@ ELECTRON_RUN_AS_NODE=1 "$CODE" "$T/magicCircle.test.mjs"
 ```
 
 这套**不需要 `pngWriter` / `pako`** —— 魔法阵只生成 RGBA，写出 PNG 字节完全在平台层里做。
+
+自定义文字和图片上传之后，**这套测试的确定性判据变了**：原来是「同种子必然同图」，现在用户注入
+的文字和图片不属于种子，改成了**「同一份参数 + 同一份注入内容 → 逐字节相同」**（第 16 节）。
+所以图片和字形蒙版是**当成输入注入**的，渲染器自己不去取 —— 这样它们仍然全在纯逻辑层可测，
+平台那一步（`readPixels` / `rasterizeGlyphs`）才需要真机。
+
+`imagePlatform.js` 里的 `rasterizeGlyphs` **测不了**（要画布），但它的纯计算部分
+（`planGlyphCanvas` / `sliceGlyphCells` / `cropToInk`）刻意抽到了 `magicText.js`，第 17 节盯着。
 
 第 10 节会打印性能基准（各尺寸的渲染耗时、默认档 GIF 的组装耗时与体积），是判断
 「能不能再往上调帧数 / 边长」的依据 —— 改动画参数后对比一下，别凭感觉调。
@@ -123,11 +131,50 @@ ELECTRON_RUN_AS_NODE=1 "$CODE" "$T/magicCircle.test.mjs"
   循环走完每层恰好转整数圈，自然回到起点。改成小数转速，首尾帧会差出一个角度，接缝处会跳。
 - **渲染函数只接受种子，不许摸 `Math.random`**（第 1 节）。「同种子同图」是这个工具能被
   这样测试的唯一理由，也是用户看到种子号之后能复现的前提。
+- **`stampImage` 的贴图外缘要落在源图首尾像素的外缘（-0.5 / w-0.5），不是像素中心**（第 13 节）。
+  映射到中心会让贴出来的图**大一个像素**、而且第一个像素被整个取到、alpha 直接顶满 —— 边缘是
+  硬边没有渐隐。这条很隐蔽，是靠「转整整一圈等于不转」暴露的：两个角度的包围盒差了一个像素。
+- **`stampImage` 的采样必须预乘**（累积 `rgb × a` 再除回去，第 13 节）。直接对 rgb 加权的话，
+  透明像素的 rgb(0,0,0) 会被算进去，边缘发黑 —— 照片裁圆、字形蒙版这类输入全靠这一点。
+  第 13 节量的是「半透明边缘的红通道不许变暗」。
+- **合成顺序是「辉光 → 图片 → 线条」**（第 15 节）。图片垫在线条之下，阵的线条把图框住；
+  反过来的话星形会糊在脸上。因为图片也要合成，`renderFigure` 不能因为 `glow = 0` 就提前返回。
+- **字形的「上」必须朝外**（第 12 节）。方向反了整圈字就是倒的 —— 这条是「文字上朝外」
+  这个视觉语言的定义，靠「字形顶端的点半径大于底端」来量。
+- **`planGlyphCanvas` 的列数要有上限**（第 17 节）。没上限的话 40 个字会排成一条几千像素的
+  长条，超过某些端的画布尺寸上限；而且它的尺寸必须和页面 `prepareCanvas` 传的**完全一致**，
+  否则 App 端旧版 canvas 按 CSS 尺寸绘制、读回来的是错像素。
+
+## 页面脚本自检（`pageCheck.mjs`）
+
+上面几套测的都是 `common/` 里的纯逻辑。**页面脚本以前被认为「没法这样测」，其实有一部分可以** ——
+这个脚本把每个页面 `.vue` 里的 `<script>` 抽出来**真跑一遍**，用假上下文（`uni` 的桩、空的
+`data()` 结果、`$nextTick`）把每个生命周期钩子、每个方法、每个计算属性都调一次。
+
+```bash
+node test/pageCheck.mjs              # 检查全部页面
+node test/pageCheck.mjs pages/image/magic-circle/magic-circle.vue   # 只查一个
+```
+
+退出码 0 = 干净。它会报两类问题：
+
+1. **import 了不存在的导出**（模块解析错误）；
+2. **引用了不存在的标识符**（运行时 ReferenceError）。
+
+**这两类 `node --check` 都抓不到** —— 它只查语法。而它们恰恰是最容易犯的错：把一个函数从
+平台层挪到纯逻辑层时忘了改 import；删掉一个没用的模块级变量后漏改了引用它的地方。
+**这个脚本就是为这两次真实事故写的**，写完之后专门把 bug 塞回去验证过它确实会红。
+
+**它不证明页面能正常跑。** 布局、平台 API 的真实行为、交互手感、性能 —— 这些仍然只能在
+HBuilderX 里看。别把「`pageCheck` 过了」当成「页面已测过」。
 
 ## 为什么值得留着
 
 这几个模块是纯函数、无平台依赖，所以能在 App / 小程序 / H5 之外直接验证。
-页面部分没法这样测 —— 那部分仍然只能在 HBuilderX 里跑真机。
+
+页面部分**没有全测的办法**，但也不等于完全测不了：`pageCheck.mjs` 能把页面脚本真跑一遍，
+抓「悬空引用 / import 解析不了」。剩下的（布局、平台 API 的真实行为、交互手感）仍然只能在
+HBuilderX 里跑真机 —— 别拿「没法验证」当借口，也别拿「pageCheck 过了」当页面测过了。
 
 它同时是 **`common/phantomTank.js` 那次拆分的回归护栏**：`imageGeometry.js` 把
 `planSize` / `coverRect` / `composite` 搬了出去，`phantomTank.js` 只做 re-export，
