@@ -11,42 +11,45 @@
 		</view>
 
 		<!-- ==================== 参数 ==================== -->
+		<!-- 四项都是调优，默认值直接能出成品，所以整卡默认折起来（摘要里带着当前值） -->
 		<view class="card">
-			<view class="row">
-				<text class="label">镜像</text>
-				<switch class="switch" color="#5B8FF9" :checked="flip" @change="onFlipChange" />
-			</view>
-			<tool-slider
-				label="大小"
-				:spaced="true"
-				:value="size"
-				:min="sizeMin"
-				:max="sizeMax"
-				:step="sizeStep"
-				@changing="onChanging('size', $event)"
-				@change="onChange('size', $event)"
-			/>
-			<tool-slider
-				label="挤压"
-				:spaced="true"
-				:value="squish"
-				:min="squishMin"
-				:max="squishMax"
-				:step="squishStep"
-				@changing="onChanging('squish', $event)"
-				@change="onChange('squish', $event)"
-			/>
-			<tool-slider
-				label="速度"
-				:spaced="true"
-				:value="speed"
-				:min="speedMin"
-				:max="speedMax"
-				:step="speedStep"
-				@changing="onChanging('speed', $event)"
-				@change="onChange('speed', $event)"
-			/>
-			<text class="hint">每帧 {{ speed * 10 }}ms；挤压 0 完全不横向变形，100 与经典摸头效果一致</text>
+			<tool-collapse title="参数" :summary="paramSummary">
+				<view class="row">
+					<text class="label">镜像</text>
+					<switch class="switch" color="#5B8FF9" :checked="flip" @change="onFlipChange" />
+				</view>
+				<tool-slider
+					label="大小"
+					:spaced="true"
+					:value="size"
+					:min="sizeMin"
+					:max="sizeMax"
+					:step="sizeStep"
+					@changing="onChanging('size', $event)"
+					@change="onChange('size', $event)"
+				/>
+				<tool-slider
+					label="挤压"
+					:spaced="true"
+					:value="squish"
+					:min="squishMin"
+					:max="squishMax"
+					:step="squishStep"
+					@changing="onChanging('squish', $event)"
+					@change="onChange('squish', $event)"
+				/>
+				<tool-slider
+					label="速度"
+					:spaced="true"
+					:value="speed"
+					:min="speedMin"
+					:max="speedMax"
+					:step="speedStep"
+					@changing="onChanging('speed', $event)"
+					@change="onChange('speed', $event)"
+				/>
+				<text class="hint">每帧 {{ speed * 10 }}ms；挤压 0 完全不横向变形，100 与经典摸头效果一致</text>
+			</tool-collapse>
 		</view>
 
 		<!-- ==================== 编辑预览 ==================== -->
@@ -112,6 +115,7 @@
 	import { getHands } from '@/common/petpetHands.js'
 	import { composite } from '@/common/imageGeometry.js'
 	import ToolSlider from '@/components/tool-slider/tool-slider.vue'
+	import ToolCollapse from '@/components/tool-collapse/tool-collapse.vue'
 	import {
 		chooseImages,
 		getImageSize,
@@ -136,7 +140,7 @@
 	}
 
 	export default {
-		components: { ToolSlider },
+		components: { ToolSlider, ToolCollapse },
 		data() {
 			return {
 				userImage: emptyImage(),
@@ -168,6 +172,11 @@
 			}
 		},
 		computed: {
+			// 折叠摘要：折起来也要看得出参数被改过没有
+			paramSummary() {
+				return (this.flip ? '镜像 · ' : '') +
+					'大小 ' + this.size + ' · 挤压 ' + this.squish + ' · 速度 ' + this.speed
+			},
 			canvasStyle() {
 				return 'width: ' + this.canvasWidth + 'px; height: ' + this.canvasHeight + 'px;'
 			},

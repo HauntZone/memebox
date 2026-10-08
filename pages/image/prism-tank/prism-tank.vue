@@ -79,72 +79,38 @@
 			</view>
 
 			<view class="card">
-				<tool-slider
-					label="里图对比度"
-					:value="innerContrast"
-					:min="contrastMin"
-					:max="contrastMax"
-					:step="contrastStep"
-					@changing="onInnerContrastChanging"
-					@change="onInnerContrastChange"
-				></tool-slider>
-				<text class="hint">制作时「先」给里图提对比度，它才有足够的动态范围挤进那条只有几十级的窄带 —— 里图本身对比度低的时候，这一步是显形质量提升最明显的地方。这个值会写进图片元数据，显形时自动施加反向对比度还原，不用手动调</text>
+				<!-- 默认 0 就能出成品，只有里图本身对比度低时才需要动 -->
+				<tool-collapse title="对比度" :summary="contrastSummary">
+					<tool-slider
+						label="里图对比度"
+						:value="innerContrast"
+						:min="contrastMin"
+						:max="contrastMax"
+						:step="contrastStep"
+						@changing="onInnerContrastChanging"
+						@change="onInnerContrastChange"
+					></tool-slider>
+					<text class="hint">制作时「先」给里图提对比度，它才有足够的动态范围挤进那条只有几十级的窄带 —— 里图本身对比度低的时候，这一步是显形质量提升最明显的地方。这个值会写进图片元数据，显形时自动施加反向对比度还原，不用手动调</text>
 
-				<tool-slider
-					label="表图对比度"
-					:value="coverContrast"
-					:min="contrastMin"
-					:max="contrastMax"
-					:step="contrastStep"
-					:spaced="true"
-					@changing="onCoverContrastChanging"
-					@change="onCoverContrastChange"
-				></tool-slider>
-				<text class="hint">作用在表图上，只影响正常观看时的观感。注意这个值「不」写进元数据（参考实现也只存里图那一个），所以显形侧不会自动还原它</text>
-				<text class="hint">不合理的对比度会严重影响显形质量 —— 里图提得过高，超出带内的部分会被直接削掉</text>
-				<text v-if="innerContrast !== 0 || coverContrast !== 0" class="link" @click="resetContrast">重置对比度</text>
+					<tool-slider
+						label="表图对比度"
+						:value="coverContrast"
+						:min="contrastMin"
+						:max="contrastMax"
+						:step="contrastStep"
+						:spaced="true"
+						@changing="onCoverContrastChanging"
+						@change="onCoverContrastChange"
+					></tool-slider>
+					<text class="hint">作用在表图上，只影响正常观看时的观感。注意这个值「不」写进元数据（参考实现也只存里图那一个），所以显形侧不会自动还原它</text>
+					<text class="hint">不合理的对比度会严重影响显形质量 —— 里图提得过高，超出带内的部分会被直接削掉</text>
+					<text v-if="innerContrast !== 0 || coverContrast !== 0" class="link" @click="resetContrast">重置对比度</text>
+				</tool-collapse>
 			</view>
 
 			<view class="card">
-				<text class="label">交错方式</text>
-				<view class="pills">
-					<view
-						v-for="option in rowOptions"
-						:key="String(option.value)"
-						class="pill"
-						:class="{ 'pill-active': isRow === option.value }"
-						@click="setRow(option.value)"
-					>
-						<text class="pill-text">{{ option.label }}</text>
-					</view>
-				</view>
-				<text class="hint">按行就是把条纹横着铺，按列是竖着铺。默认的「按行 + 间隔 1 + 斜向 1」就是标准棋盘格</text>
-
-				<tool-slider
-					label="间隔"
-					:value="gap"
-					:min="gapMin"
-					:max="gapMax"
-					:step="1"
-					:spaced="true"
-					@changing="onGapChanging"
-					@change="onGapChange"
-				></tool-slider>
-				<text class="hint">条纹占 {{ gap }} 格、空 1 格，所以里图占 1/{{ gap + 1 }} 的像素。间隔越大表图越完整，但里图能用的采样点越少、显形越糊。「间隔大于 1 时显形那边的『扩散迭代次数』才有作用」—— 那时才会有覆盖像素在第一轮找不到可用的邻居</text>
-
-				<tool-slider
-					label="斜向"
-					:value="slope"
-					:min="slopeMin"
-					:max="slopeMax"
-					:step="1"
-					:spaced="true"
-					@changing="onSlopeChanging"
-					@change="onSlopeChange"
-				></tool-slider>
-				<text class="hint">0 表示不斜（整行 / 整列地切），1 以上把条纹压斜成一个角度。只改观感，不影响能不能显形</text>
-
-				<text class="label row-spaced">长边上限</text>
+				<!-- 长边上限是小程序 / App 上真会去调的性能开关，留在外面 -->
+				<text class="label">长边上限</text>
 				<view class="pills">
 					<view
 						v-for="option in edgeOptions"
@@ -157,6 +123,46 @@
 					</view>
 				</view>
 				<text class="hint">越大越清晰也越慢。一次全分辨率生成要跑两遍 PNG 编码，小程序和 App 上建议先用 720</text>
+
+				<!-- 默认那组就是标准棋盘格，改它反而容易把图做坏，所以折起来 -->
+				<tool-collapse title="交错方式" :summary="interleaveSummary" :spaced="true">
+					<view class="pills">
+						<view
+							v-for="option in rowOptions"
+							:key="String(option.value)"
+							class="pill"
+							:class="{ 'pill-active': isRow === option.value }"
+							@click="setRow(option.value)"
+						>
+							<text class="pill-text">{{ option.label }}</text>
+						</view>
+					</view>
+					<text class="hint">按行就是把条纹横着铺，按列是竖着铺。默认的「按行 + 间隔 1 + 斜向 1」就是标准棋盘格</text>
+
+					<tool-slider
+						label="间隔"
+						:value="gap"
+						:min="gapMin"
+						:max="gapMax"
+						:step="1"
+						:spaced="true"
+						@changing="onGapChanging"
+						@change="onGapChange"
+					></tool-slider>
+					<text class="hint">条纹占 {{ gap }} 格、空 1 格，所以里图占 1/{{ gap + 1 }} 的像素。间隔越大表图越完整，但里图能用的采样点越少、显形越糊。「间隔大于 1 时显形那边的『扩散迭代次数』才有作用」—— 那时才会有覆盖像素在第一轮找不到可用的邻居</text>
+
+					<tool-slider
+						label="斜向"
+						:value="slope"
+						:min="slopeMin"
+						:max="slopeMax"
+						:step="1"
+						:spaced="true"
+						@changing="onSlopeChanging"
+						@change="onSlopeChange"
+					></tool-slider>
+					<text class="hint">0 表示不斜（整行 / 整列地切），1 以上把条纹压斜成一个角度。只改观感，不影响能不能显形</text>
+				</tool-collapse>
 			</view>
 
 			<view class="actions">
@@ -266,16 +272,19 @@
 			</view>
 
 			<view class="card">
-				<tool-slider
-					label="对比度"
-					:value="decodeContrast"
-					:min="contrastMin"
-					:max="contrastMax"
-					:step="contrastStep"
-					@changing="onDecodeContrastChanging"
-					@change="onDecodeContrastChange"
-				></tool-slider>
-				<text class="hint">制作时给里图提了多少对比度，这里就要反向施加多少把它还原。带元数据的图选进来会自动填好，不用手动调；这里主要是拿来救那些元数据丢了的图 —— 显形出来发灰、层次糊在一起，就往负的方向拉</text>
+				<!-- 带元数据的图会自动填好，这只是元数据丢了时的救急旋钮 -->
+				<tool-collapse title="对比度还原" :summary="decodeContrastSummary">
+					<tool-slider
+						label="对比度"
+						:value="decodeContrast"
+						:min="contrastMin"
+						:max="contrastMax"
+						:step="contrastStep"
+						@changing="onDecodeContrastChanging"
+						@change="onDecodeContrastChange"
+					></tool-slider>
+					<text class="hint">制作时给里图提了多少对比度，这里就要反向施加多少把它还原。带元数据的图选进来会自动填好，不用手动调；这里主要是拿来救那些元数据丢了的图 —— 显形出来发灰、层次糊在一起，就往负的方向拉</text>
+				</tool-collapse>
 			</view>
 
 			<view class="actions">
@@ -345,8 +354,9 @@
 
 <script>
 	// 显式引入而不是只靠 easycom：万一 easycom 没生效，页面会直接报
-	// 「Unknown custom element: <tool-slider>」，而这里没法本地编译排查
+	// 「Unknown custom element: <tool-slider> / <tool-collapse>」，而这里没法本地编译排查
 	import ToolSlider from '@/components/tool-slider/tool-slider.vue'
+	import ToolCollapse from '@/components/tool-collapse/tool-collapse.vue'
 	import {
 		LIMITS,
 		DECODE_LOWER_DEFAULT,
@@ -387,7 +397,7 @@
 	}
 
 	export default {
-		components: { ToolSlider },
+		components: { ToolSlider, ToolCollapse },
 		data() {
 			return {
 				mode: 'encode',
@@ -504,6 +514,16 @@
 			}
 		},
 		computed: {
+			// 折叠摘要：这三个都是「不动也正常」的调参，折起来时必须能一眼看出被改过没有
+			contrastSummary() {
+				return '里图 ' + this.innerContrast + ' · 表图 ' + this.coverContrast
+			},
+			interleaveSummary() {
+				return (this.isRow ? '按行' : '按列') + ' · 间隔 ' + this.gap + ' · 斜向 ' + this.slope
+			},
+			decodeContrastSummary() {
+				return '当前 ' + this.decodeContrast
+			},
 			bothPicked() {
 				return !!(this.coverImage.path && this.innerImage.path)
 			},

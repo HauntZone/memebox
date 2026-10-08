@@ -41,39 +41,6 @@
 				</view>
 				<text class="hint">灰度是唯一能让两张图都精确还原的模式。关掉后黑底图保色，白底图会变成黑底图加一层亮度偏移</text>
 
-				<view class="row row-spaced">
-					<text class="label">白底图反相</text>
-					<switch class="switch" color="#5B8FF9" :checked="invertWhite" @change="onInvertChange('white', $event)" />
-				</view>
-				<view class="row row-spaced">
-					<text class="label">黑底图反相</text>
-					<switch class="switch" color="#5B8FF9" :checked="invertBlack" @change="onInvertChange('black', $event)" />
-				</view>
-
-				<text class="label row-spaced">白底图亮度 {{ gainWhiteText }}</text>
-				<slider
-					class="slider"
-					:min="gainWhiteMin"
-					:max="gainWhiteMax"
-					:step="gainStep"
-					:value="gainWhite * gainScale"
-					activeColor="#5B8FF9"
-					block-size="18"
-					@change="onGainChange('white', $event)"
-				/>
-				<text class="label">黑底图亮度 {{ gainBlackText }}</text>
-				<slider
-					class="slider"
-					:min="gainBlackMin"
-					:max="gainBlackMax"
-					:step="gainStep"
-					:value="gainBlack * gainScale"
-					activeColor="#5B8FF9"
-					block-size="18"
-					@change="onGainChange('black', $event)"
-				/>
-				<text class="hint">效果强度 = 两张图在同一像素上的亮度差。黑底那张默认压到 0.30（这类工具的标准做法）：压暗后差值才会有 90 左右，两个底才差得明显。调回 1.00 可以保真，但两张普通照片的差接近 0，看起来就是一样的</text>
-
 				<text class="label row-spaced">长边上限</text>
 				<view class="pills">
 					<view
@@ -87,6 +54,42 @@
 					</view>
 				</view>
 				<text class="hint">越大越清晰也越慢，小程序和 App 上建议先用 720</text>
+
+				<!-- 反相和亮度都默认在推荐值上（黑底 0.30 就是标准做法），不调也能出效果 -->
+				<tool-collapse title="高级设置" :summary="advancedSummary" :spaced="true">
+					<view class="row">
+						<text class="label">白底图反相</text>
+						<switch class="switch" color="#5B8FF9" :checked="invertWhite" @change="onInvertChange('white', $event)" />
+					</view>
+					<view class="row row-spaced">
+						<text class="label">黑底图反相</text>
+						<switch class="switch" color="#5B8FF9" :checked="invertBlack" @change="onInvertChange('black', $event)" />
+					</view>
+
+					<text class="label row-spaced">白底图亮度 {{ gainWhiteText }}</text>
+					<slider
+						class="slider"
+						:min="gainWhiteMin"
+						:max="gainWhiteMax"
+						:step="gainStep"
+						:value="gainWhite * gainScale"
+						activeColor="#5B8FF9"
+						block-size="18"
+						@change="onGainChange('white', $event)"
+					/>
+					<text class="label">黑底图亮度 {{ gainBlackText }}</text>
+					<slider
+						class="slider"
+						:min="gainBlackMin"
+						:max="gainBlackMax"
+						:step="gainStep"
+						:value="gainBlack * gainScale"
+						activeColor="#5B8FF9"
+						block-size="18"
+						@change="onGainChange('black', $event)"
+					/>
+					<text class="hint">效果强度 = 两张图在同一像素上的亮度差。黑底那张默认压到 0.30（这类工具的标准做法）：压暗后差值才会有 90 左右，两个底才差得明显。调回 1.00 可以保真，但两张普通照片的差接近 0，看起来就是一样的</text>
+				</tool-collapse>
 			</view>
 
 			<view class="actions">
@@ -189,12 +192,14 @@
 		noteError,
 		platformName
 	} from '@/common/phantomTankAdapter.js'
+	import ToolCollapse from '@/components/tool-collapse/tool-collapse.vue'
 
 	function emptyImage() {
 		return { src: '', path: '', width: 0, height: 0 }
 	}
 
 	export default {
+		components: { ToolCollapse },
 		data() {
 			return {
 				mode: 'encode',
@@ -235,6 +240,11 @@
 			}
 		},
 		computed: {
+			// 折叠摘要：两个亮度是效果强弱的唯一旋钮，折起来也得看得见现在是多少
+			advancedSummary() {
+				return (this.invertWhite || this.invertBlack ? '有反相 · ' : '') +
+					'白底 ' + this.gainWhiteText + ' · 黑底 ' + this.gainBlackText
+			},
 			bothPicked() {
 				return !!(this.whiteImage.path && this.blackImage.path)
 			},

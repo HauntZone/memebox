@@ -82,46 +82,48 @@
 		</view>
 
 		<!-- ==================== 文字 ==================== -->
+		<!-- 不填铭文就是一张纯图形的魔法阵，所以整张卡默认折起来（摘要里带着缺字告警） -->
 		<view class="card">
-			<text class="label">铭文</text>
-			<text class="hint">沿外圈排一圈。英文字母、数字和常用符号用内置的刻痕字体，各端完全一致；中文会借系统字体渲染，字形随设备变。</text>
-			<input
-				class="text-input"
-				type="text"
-				:value="text"
-				placeholder="比如 SOLOMON"
-				placeholder-class="text-placeholder"
-				confirm-type="done"
-				@input="onTextInput"
-				@blur="onTextCommit"
-				@confirm="onTextCommit"
-			/>
-			<tool-slider
-				label="文字环半径"
-				:spaced="true"
-				:value="textRadius"
-				:min="textRadiusMin"
-				:max="textRadiusMax"
-				:step="1"
-				@changing="onParamChanging('textRadius', $event)"
-				@change="onParamChange('textRadius', $event)"
-			/>
-			<tool-slider
-				label="文字大小"
-				:spaced="true"
-				:value="textSize"
-				:min="textSizeMin"
-				:max="textSizeMax"
-				:step="1"
-				@changing="onParamChanging('textSize', $event)"
-				@change="onParamChange('textSize', $event)"
-			/>
-			<text v-if="missingChars > 0" class="hint hint-warn">
-				有 {{ missingChars }} 个字符没能渲染（画成方框的那个）。中文需要这一端有对应字体。
-			</text>
-			<text v-else-if="text && !textFits" class="hint hint-warn">
-				文字太长，绕不下会自己压自己 —— 把文字缩短或把它调小。
-			</text>
+			<tool-collapse title="铭文" :summary="textSummary">
+				<text class="hint">沿外圈排一圈。英文字母、数字和常用符号用内置的刻痕字体，各端完全一致；中文会借系统字体渲染，字形随设备变。</text>
+				<input
+					class="text-input"
+					type="text"
+					:value="text"
+					placeholder="比如 SOLOMON"
+					placeholder-class="text-placeholder"
+					confirm-type="done"
+					@input="onTextInput"
+					@blur="onTextCommit"
+					@confirm="onTextCommit"
+				/>
+				<tool-slider
+					label="文字环半径"
+					:spaced="true"
+					:value="textRadius"
+					:min="textRadiusMin"
+					:max="textRadiusMax"
+					:step="1"
+					@changing="onParamChanging('textRadius', $event)"
+					@change="onParamChange('textRadius', $event)"
+				/>
+				<tool-slider
+					label="文字大小"
+					:spaced="true"
+					:value="textSize"
+					:min="textSizeMin"
+					:max="textSizeMax"
+					:step="1"
+					@changing="onParamChanging('textSize', $event)"
+					@change="onParamChange('textSize', $event)"
+				/>
+				<text v-if="missingChars > 0" class="hint hint-warn">
+					有 {{ missingChars }} 个字符没能渲染（画成方框的那个）。中文需要这一端有对应字体。
+				</text>
+				<text v-else-if="text && !textFits" class="hint hint-warn">
+					文字太长，绕不下会自己压自己 —— 把文字缩短或把它调小。
+				</text>
+			</tool-collapse>
 		</view>
 
 		<!-- ==================== 图片 ==================== -->
@@ -326,6 +328,7 @@
 		TEXT_LIMITS, resolveGlyphs, needsBitmap, placeTextOnRing, planGlyphCanvas
 	} from '@/common/magicText.js'
 	import ToolSlider from '@/components/tool-slider/tool-slider.vue'
+	import ToolCollapse from '@/components/tool-collapse/tool-collapse.vue'
 	import {
 		exportPng, exportGif, savePng, releaseImage, getDiagnostics, noteError,
 		chooseImages, getImageSize, readPixels, rasterizeGlyphs
@@ -360,7 +363,7 @@
 	}
 
 	export default {
-		components: { ToolSlider },
+		components: { ToolSlider, ToolCollapse },
 		data() {
 			return {
 				presetKey: 'pentagram',
@@ -450,6 +453,13 @@
 			},
 			displaySeed() {
 				return String(this.seed)
+			},
+			// 折叠摘要。缺字告警必须挂在这儿 —— 折起来之后那张 hint-warn 是看不见的，
+			// 不提到摘要里的话，用户会以为文字好端端地进去了。
+			textSummary() {
+				if (!this.text) return '未填写'
+				if (this.missingChars > 0) return this.text + '（有字符未渲染）'
+				return this.text
 			},
 			presetOptions() {
 				const keys = MAGIC_LIMITS.presetKeys
